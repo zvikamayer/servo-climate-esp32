@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>בקרת סרוו ומזג אוויר</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@500;700&family=Heebo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+<style>
+  :root {
+    --bg: #eef1f3;
+    --surface: #ffffff;
+    --surface-2: #e7ebee;
+    --line: #d9dfe3;
+    --ink: #1a2228;
+    --ink-dim: #5c6b74;
+    --accent: #3d7dc9;
+    --accent-ink: #ffffff;
+    --good: #2f8f68;
+    --good-bg: #e3f2ea;
+    --warm: #c97a3d;
+    --warm-bg: #f8ece2;
+    --cool: #3d92c9;
+    --shadow: 0 1px 2px rgba(20, 30, 40, 0.06), 0 8px 24px rgba(20, 30, 40, 0.08);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c1216;
+      --surface: #141b21;
+      --surface-2: #1b242b;
+      --line: #283238;
+      --ink: #eef3f5;
+      --ink-dim: #93a2aa;
+      --accent: #6ba3e0;
+      --accent-ink: #0a1520;
+      --good: #5fb88f;
+      --good-bg: #163329;
+      --warm: #e0a066;
+      --warm-bg: #33241a;
+      --cool: #6bb4e0;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Heebo", "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px 64px;
+  }
+
+  .panel { width: 100%; max-width: 640px; display: flex; flex-direction: column; gap: 22px; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+
+  .control { padding: 26px 26px 24px; display: flex; flex-direction: column; gap: 20px; }
+  .clock-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+  .clock {
+    font-family: "IBM Plex Mono", monospace; font-size: 2.1rem; font-weight: 500;
+    font-variant-numeric: tabular-nums; letter-spacing: 0.01em; line-height: 1; direction: ltr; text-align: left;
+  }
+
+  .clock .date { font-size: 0.95rem; color: var(--ink-dim); margin-top: 4px; font-weight: 400; }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px;
+    font-size: 0.85rem; font-weight: 600; background: var(--surface-2); color: var(--ink-dim);
+    border: 1px solid var(--line); white-space: nowrap;
+  }
+
+  .status-pill .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-dim); flex-shrink: 0; }
+
+  .status-pill.on { background: var(--good-bg); color: var(--good); border-color: transparent; }
+
+  .status-pill.on .dot {
+    background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent);
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) { .status-pill.on .dot { animation: none; } }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent); }
+    50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--good) 10%, transparent); }
+  }
+
+  .climate-card { padding: 24px 26px; display: flex; flex-direction: column; gap: 18px; }
+  .readings-row { display: flex; gap: 22px; }
+  .reading { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .reading .label { font-size: 0.72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+  .reading .value {
+    font-family: "IBM Plex Mono", monospace; font-size: 2.3rem; font-weight: 500; direction: ltr; text-align: left;
+    font-variant-numeric: tabular-nums;
+  }
+  .reading.temp .value { color: var(--warm); }
+  .reading.hum .value { color: var(--cool); }
+  .reading .unit { font-size: 1.1rem; color: var(--ink-dim); font-weight: 400; }
+
+  .chart-wrap { position: relative; height: 200px; }
+  .chart-note { font-size: 0.76rem; color: var(--ink-dim); text-align: center; }
+
+  .divider { height: 1px; background: var(--line); }
+
+  .servo-card { padding: 24px 26px 26px; display: flex; flex-direction: column; gap: 18px; }
+  .servo-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .servo-head h2 { font-family: "Frank Ruhl Libre", serif; font-size: 1.05rem; margin: 0; font-weight: 700; }
+  .servo-state-label { font-family: "IBM Plex Mono", monospace; font-size: 0.8rem; color: var(--ink-dim); }
+
+  .angle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #angleValue {
+    font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums;
+    font-size: 1.3rem; font-weight: 600; color: var(--accent); direction: ltr;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 8px; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--line); direction: ltr; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
+    border: 3px solid var(--surface); box-shadow: 0 2px 6px rgba(0,0,0,0.25); cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
+    border: 3px solid var(--surface); box-shadow: 0 2px 6px rgba(0,0,0,0.25); cursor: pointer;
+  }
+
+  .range-labels { display: flex; justify-content: space-between; font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; color: var(--ink-dim); direction: ltr; }
+
+  button { font-family: inherit; cursor: pointer; }
+
+  .press-btn {
+    width: 100%; border: none; border-radius: 14px; padding: 22px 26px; font-size: 1.35rem; font-weight: 700;
+    background: var(--accent); color: var(--accent-ink);
+    box-shadow: 0 3px 0 color-mix(in srgb, var(--accent) 60%, black 15%);
+    transition: transform 0.08s ease, box-shadow 0.08s ease, opacity 0.15s ease;
+  }
+  .press-btn:hover:not(:disabled) { filter: brightness(1.04); }
+  .press-btn:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 0 0 color-mix(in srgb, var(--accent) 60%, black 15%); }
+  .press-btn:disabled { opacity: 0.5; cursor: default; }
+
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .log-card { padding: 4px 0 6px; }
+  .log-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 26px 14px; }
+  .log-head h2 { font-family: "Frank Ruhl Libre", serif; font-size: 1.05rem; margin: 0; font-weight: 700; }
+  .log-count { font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; color: var(--ink-dim); }
+
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+
+  thead th {
+    text-align: right; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--ink-dim); font-weight: 600; padding: 0 26px 10px; border-bottom: 1px solid var(--line);
+  }
+
+  thead th.num, tbody td.num { text-align: left; }
+  thead th.icon-col { width: 76px; }
+
+  tbody td { padding: 13px 26px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background 0.12s ease; }
+  tbody tr:hover { background: var(--surface-2); }
+
+  .start-cell { display: flex; flex-direction: column; gap: 2px; }
+  .start-cell .time { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; font-weight: 500; }
+  .start-cell .date { font-size: 0.76rem; color: var(--ink-dim); }
+  .angle-cell { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+
+  .icon-btn {
+    border: 1px solid var(--line); background: var(--surface-2); color: #b8503f;
+    padding: 6px 12px; border-radius: 7px; font-size: 0.8rem; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .icon-btn:hover { background: #f8e9e6; border-color: #b8503f; }
+
+  .empty-row td { padding: 30px 26px; text-align: center; color: var(--ink-dim); font-size: 0.88rem; }
+  .foot-note { font-size: 0.76rem; color: var(--ink-dim); text-align: center; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <div class="card control">
+    <div class="clock-row">
+      <div>
+        <div class="clock" id="clock">00:00:00<div class="date" id="clockDate">—</div></div>
+      </div>
+      <div class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">טוען…</span></div>
+    </div>
+  </div>
+
+  <div class="card servo-card">
+    <div class="servo-head">
+      <h2>לחיצת סרוו</h2>
+      <span class="servo-state-label" id="servoStateLabel">—</span>
+    </div>
+    <div class="angle-row">
+      <span>זווית ללחיצה:</span>
+      <span id="angleValue">90°</span>
+    </div>
+    <input type="range" id="angleSlider" min="0" max="180" value="90" step="1">
+    <div class="range-labels"><span>0°</span><span>90°</span><span>180°</span></div>
+    <button class="press-btn" id="pressBtn" disabled>טוען…</button>
+  </div>
+
+  <div class="card climate-card">
+    <div class="readings-row">
+      <div class="reading temp">
+        <span class="label">טמפרטורה</span>
+        <span class="value" id="tempValue">—<span class="unit">°C</span></span>
+      </div>
+      <div class="reading hum">
+        <span class="label">לחות</span>
+        <span class="value" id="humValue">—<span class="unit">%</span></span>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="chart-wrap"><canvas id="climateChart"></canvas></div>
+    <div class="chart-note" id="chartNote">מתעדכן כל שעה</div>
+  </div>
+
+  <div class="card log-card">
+    <div class="log-head">
+      <h2>יומן לחיצות</h2>
+      <span class="log-count" id="logCount">—</span>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>שעת הפעלה</th><th class="num">זווית</th><th class="icon-col"></th></tr></thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="foot-note" id="footNote">מתחבר…</div>
+</div>
+
+<script>
+  function pad(n) { return String(n).padStart(2, "0"); }
+  var DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
+  var PRESS_STATE_LABELS = ["מוכן ללחיצה", "נע לזווית…", "עוצר…", "חוזר להתחלה…"];
+
+  // ---- שעון (שעון הדפדפן שלך, תמיד מדויק) ----
+  var clockEl = document.getElementById("clock");
+  var clockDateEl = document.getElementById("clockDate");
+  function renderClock() {
+    var now = new Date();
+    clockEl.childNodes[0].nodeValue = pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+    clockDateEl.textContent = "יום " + DAYS[now.getDay()] + ", " + pad(now.getDate()) + "/" + pad(now.getMonth() + 1) + "/" + now.getFullYear();
+  }
+  renderClock();
+  setInterval(renderClock, 1000);
+
+  // ---- אלמנטים ----
+  var pill = document.getElementById("statusPill");
+  var statusText = document.getElementById("statusText");
+  var footNote = document.getElementById("footNote");
+  var tempValue = document.getElementById("tempValue");
+  var humValue = document.getElementById("humValue");
+  var chartNote = document.getElementById("chartNote");
+  var servoStateLabel = document.getElementById("servoStateLabel");
+  var angleSlider = document.getElementById("angleSlider");
+  var angleValue = document.getElementById("angleValue");
+  var pressBtn = document.getElementById("pressBtn");
+  var logBody = document.getElementById("logBody");
+  var logCount = document.getElementById("logCount");
+
+  var mqttReady = false;
+  var deviceOnline = false;
+
+  // ---- זוכרים את הזווית האחרונה שנבחרה (בדפדפן הזה בלבד) ----
+  var ANGLE_STORAGE_KEY = "servoClimateLastAngle";
+  function loadSavedAngle() {
+    try {
+      var saved = parseInt(localStorage.getItem(ANGLE_STORAGE_KEY), 10);
+      if (!isNaN(saved) && saved >= 0 && saved <= 180) {
+        angleSlider.value = saved;
+        angleValue.textContent = saved + "°";
+      }
+    } catch (e) { /* אחסון חסום - ממשיכים עם ברירת המחדל */ }
+  }
+  function saveAngle(angle) {
+    try { localStorage.setItem(ANGLE_STORAGE_KEY, angle); } catch (e) { /* אחסון חסום - לא קריטי */ }
+  }
+  loadSavedAngle();
+
+  // ---- MQTT (מצב חי - עדכון כמעט מיידי, ופקודות מיידיות) ----
+  var MQTT_URL = "wss://broker.hivemq.com:8884/mqtt";
+  var MQTT_TOPIC_STATUS = "zvikamayer-servoclimate/status";
+  var MQTT_TOPIC_CMD = "zvikamayer-servoclimate/command";
+
+  var mqttClient = mqtt.connect(MQTT_URL, { clientId: "site-" + Math.random().toString(16).slice(2) });
+
+  mqttClient.on("connect", function () {
+    mqttReady = true;
+    mqttClient.subscribe(MQTT_TOPIC_STATUS);
+    footNote.textContent = "מחובר בלייב · ממתין לעדכון מהבקר";
+  });
+
+  mqttClient.on("reconnect", function () { mqttReady = false; });
+  mqttClient.on("close", function () { mqttReady = false; });
+
+  mqttClient.on("message", function (topic, message) {
+    if (topic !== MQTT_TOPIC_STATUS) return;
+    try {
+      var data = JSON.parse(message.toString());
+      deviceOnline = true;
+      renderLiveStatus(data);
+      renderChart(data.history || []);
+      renderLog(data.log || []);
+      footNote.textContent = "מחובר בלייב · " + (data.log || []).length + " לחיצות ביומן · " + (data.history || []).length + " נקודות בגרף";
+    } catch (e) { /* התעלמות מהודעה פגומה */ }
+  });
+
+  function fmtEpoch(epoch) {
+    if (!epoch) return "לא ידוע (לפני סנכרון שעון)";
+    var d = new Date(epoch * 1000);
+    return { time: pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()),
+             date: pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear() + " · " + DAYS[d.getDay()] };
+  }
+
+  // ---- מצב חי - טמפ'/לחות, מצב סרוו ----
+  var lastPressState = 0;
+
+  function renderLiveStatus(data) {
+    pill.classList.add("on");
+    statusText.textContent = "מחובר";
+
+    if (data.climateOk) {
+      tempValue.childNodes[0].nodeValue = data.temp.toFixed(1);
+      humValue.childNodes[0].nodeValue = data.hum.toFixed(1);
+    } else {
+      tempValue.childNodes[0].nodeValue = "—";
+      humValue.childNodes[0].nodeValue = "—";
+    }
+
+    lastPressState = data.pressState || 0;
+    servoStateLabel.textContent = PRESS_STATE_LABELS[lastPressState] + " (" + data.servoAngle + "°)";
+
+    var idle = lastPressState === 0;
+    pressBtn.disabled = !mqttReady || !idle;
+    pressBtn.textContent = idle ? "הפעל (" + angleSlider.value + "°)" : "בתהליך…";
+  }
+
+  // ---- גרף היסטוריה (Chart.js, טמפ' + לחות, שני צירי Y) ----
+  var chartCtx = document.getElementById("climateChart").getContext("2d");
+  var climateChart;
+
+  function renderChart(points) {
+    var labels = points.map(function (p) {
+      return new Date(p.t * 1000).toLocaleString("he-IL", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
+    });
+    var tempData = points.map(function (p) { return p.c / 10; });
+    var humData = points.map(function (p) { return p.h / 10; });
+
+    chartNote.textContent = points.length + " נקודות (מתעדכן כל שעה)";
+
+    if (climateChart) {
+      climateChart.data.labels = labels;
+      climateChart.data.datasets[0].data = tempData;
+      climateChart.data.datasets[1].data = humData;
+      climateChart.update();
+      return;
+    }
+
+    var dim = getComputedStyle(document.documentElement).getPropertyValue("--ink-dim").trim();
+    var line = getComputedStyle(document.documentElement).getPropertyValue("--line").trim();
+    var warm = getComputedStyle(document.documentElement).getPropertyValue("--warm").trim();
+    var cool = getComputedStyle(document.documentElement).getPropertyValue("--cool").trim();
+
+    climateChart = new Chart(chartCtx, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [
+          { label: "טמפ' (°C)", data: tempData, borderColor: warm, backgroundColor: "transparent", tension: 0.3, pointRadius: 0, yAxisID: "y" },
+          { label: "לחות (%)", data: humData, borderColor: cool, backgroundColor: "transparent", tension: 0.3, pointRadius: 0, yAxisID: "y1" }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        scales: {
+          x: { ticks: { color: dim, maxTicksLimit: 6 }, grid: { color: line } },
+          y: { position: "left", ticks: { color: warm }, grid: { color: line }, title: { display: true, text: "°C", color: warm } },
+          y1: { position: "right", ticks: { color: cool }, grid: { display: false }, title: { display: true, text: "%", color: cool } }
+        },
+        plugins: { legend: { labels: { color: dim } } }
+      }
+    });
+  }
+
+  // ---- יומן לחיצות ----
+  function renderLog(log) {
+    logBody.innerHTML = "";
+    logCount.textContent = log.length + (log.length === 1 ? " רשומה" : " רשומות");
+
+    if (log.length === 0) {
+      logBody.innerHTML = '<tr class="empty-row"><td colspan="3">אין עדיין לחיצות ביומן</td></tr>';
+      return;
+    }
+
+    log.slice().sort(function (a, b) { return b.t - a.t; }).forEach(function (entry) {
+      var tr = document.createElement("tr");
+      var f = fmtEpoch(entry.t);
+      var startHtml = typeof f === "string"
+        ? '<span class="date">' + f + "</span>"
+        : '<span class="time">' + f.time + '</span><span class="date">' + f.date + "</span>";
+      tr.innerHTML =
+        '<td><div class="start-cell">' + startHtml + "</div></td>" +
+        '<td class="num"><span class="angle-cell">' + entry.a + "°</span></td>" +
+        '<td><button class="icon-btn" aria-label="מחק רשומה" title="מחק רשומה">מחק ✕</button></td>';
+      tr.querySelector(".icon-btn").addEventListener("click", function () { deleteEntry(entry.id); });
+      logBody.appendChild(tr);
+    });
+  }
+
+  function deleteEntry(id) {
+    if (!mqttReady) {
+      footNote.textContent = "אין עדיין חיבור לייב - נסי שוב בעוד רגע";
+      return;
+    }
+    mqttClient.publish(MQTT_TOPIC_CMD, "delete:" + id);
+  }
+
+  // ---- סליידר + כפתור הפעלה ----
+  angleSlider.addEventListener("input", function () {
+    angleValue.textContent = angleSlider.value + "°";
+    saveAngle(angleSlider.value);
+    if (lastPressState === 0) pressBtn.textContent = "הפעל (" + angleSlider.value + "°)";
+  });
+
+  pressBtn.addEventListener("click", function () {
+    if (!mqttReady || lastPressState !== 0) return;
+    mqttClient.publish(MQTT_TOPIC_CMD, "press:" + angleSlider.value);
+    footNote.textContent = "פקודה נשלחה מיידית לבקר…";
+  });
+</script>
+
+</body>
+</html>
