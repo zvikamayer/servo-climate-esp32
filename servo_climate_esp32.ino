@@ -421,6 +421,7 @@ void setup() {
   wifiMulti.addAP(WIFI_SSID, WIFI_PASSWORD);
   wifiMulti.addAP(WIFI_SSID_2, WIFI_PASSWORD_2);
   wifiMulti.addAP(WIFI_SSID_3, WIFI_PASSWORD_3);
+  wifiMulti.addAP(WIFI_SSID_4, WIFI_PASSWORD_4);
   wifiMulti.run();
 
   mqttClient.setBufferSize(6144); // ההיסטוריה+היומן יכולים לגדול, ברירת המחדל (256) קטנה מדי
